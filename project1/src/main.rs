@@ -1,7 +1,7 @@
 use clap::{arg, command};
 use plotters::coord::types::RangedCoordu32;
 use plotters::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::read_to_string;
 use std::str::FromStr;
@@ -113,12 +113,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|e| (e[0].to_owned() + "\n" + e[1]).parse())
         .collect::<Result<Vec<Event>, _>>()?;
 
-    let mut hosts = HashSet::new();
-    events.iter().for_each(|e| {
-        hosts.insert(e.host.clone());
+    let mut hosts = BTreeMap::new();
+    events.iter().for_each(|e| match hosts.get_mut(&e.host) {
+        Some(num) => *num += 1,
+        None => {
+            hosts.insert(e.host.clone(), 1);
+        }
     });
 
-    let w = events.len() as u32 * EVENT_PAD_X + EVENT_PAD_X;
+    let w = *hosts.values().max().unwrap() as u32 * EVENT_PAD_X + 3 * EVENT_PAD_X;
     let h = hosts.len() as u32 * HLINE_PAD_Y + HLINE_PAD_Y;
 
     let root = BitMapBackend::new("out.png", (w, h)).into_drawing_area();
@@ -131,7 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ));
 
     let mut host_ys = HashMap::new();
-    for (i, host) in hosts.iter().enumerate() {
+    for (i, host) in hosts.keys().enumerate() {
         let y = HLINE_PAD_Y + HLINE_PAD_Y * i as u32;
         host_ys.insert(host, y);
         draw_hline(&root, host, y, w, BLACK)?;
@@ -141,11 +144,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         let host = event.host;
         let x = *event.clock.get(&host).unwrap() as u32 * EVENT_PAD_X + EVENT_PAD_X;
         let y = *host_ys.get(&host).unwrap();
-        draw_event(&root, "A", x, y, BLACK)?;
+        match event.event_type {
+            EventType::Receive => draw_event(&root, "", x, y, RED)?,
+            EventType::Send => draw_event(&root, "", x, y, BLACK)?,
+            _ => draw_event(&root, "", x, y, BLACK)?,
+        }
+
+        if let EventType::Receive = event.event_type {
+            let sender: Vec<String> = event
+                .clock
+                .keys()
+                .map(String::to_owned)
+                .filter(|h| !h.eq(&host))
+                .collect();
+            let sender = sender.last().unwrap().clone();
+            let send_clock = event.clock.get(&sender).unwrap();
+            let send_x = *send_clock as u32 * EVENT_PAD_X + EVENT_PAD_X;
+            let send_y = *host_ys.get(&sender).unwrap();
+            draw_conn(&mut chart, (send_x, send_y), (x, y), RED)?;
+        }
     }
 
-    draw_conn(&mut chart, (0, 0), (20, 20), RED)?;
-    draw_event(&root, "A", 300, 300, BLACK)?;
     root.present()?;
     Ok(())
 }

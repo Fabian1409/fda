@@ -5,17 +5,36 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::read_to_string;
 use std::str::FromStr;
+use strum::{EnumIter, IntoEnumIterator};
 
 const HLINE_PAD_X: u32 = 30;
 const HLINE_PAD_Y: u32 = 100;
 const EVENT_PAD_X: u32 = 50;
 const FONT_SIZE: f32 = 20.0;
 
-#[derive(Debug)]
+#[derive(EnumIter, Debug, PartialEq)]
 enum EventType {
-    Event(String),
+    Init,
+    MakingProgress,
+    Computing,
+    Checkpoint,
     Send,
     Receive,
+    ProcessingResults,
+}
+
+impl EventType {
+    fn style(&self) -> ShapeStyle {
+        match self {
+            Self::Init => ShapeStyle::from(&BLACK).filled(),
+            Self::MakingProgress => ShapeStyle::from(&BLACK),
+            Self::Computing => ShapeStyle::from(&BLACK),
+            Self::Checkpoint => ShapeStyle::from(&GREEN).filled(),
+            Self::Send => ShapeStyle::from(&BLUE).filled(),
+            Self::Receive => ShapeStyle::from(&RED).filled(),
+            Self::ProcessingResults => ShapeStyle::from(&BLACK),
+        }
+    }
 }
 
 impl FromStr for EventType {
@@ -23,9 +42,14 @@ impl FromStr for EventType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "Init event" => Ok(EventType::Init),
+            "Making progress" => Ok(EventType::MakingProgress),
+            "Computing" => Ok(EventType::Computing),
+            "Checkpoint" => Ok(EventType::Checkpoint),
             "Send event" => Ok(EventType::Send),
             "Receive event" => Ok(EventType::Receive),
-            _ => Ok(EventType::Event(s.to_owned())),
+            "Processing results" => Ok(EventType::ProcessingResults),
+            _ => Err(format!("invalid event type {s}").into()),
         }
     }
 }
@@ -53,18 +77,11 @@ impl FromStr for Event {
 
 fn draw_event(
     root: &DrawingArea<BitMapBackend, Cartesian2d<RangedCoordu32, RangedCoordu32>>,
-    label: &str,
     x: u32,
     y: u32,
-    color: RGBColor,
+    style: ShapeStyle,
 ) -> Result<(), Box<dyn Error>> {
-    let event = EmptyElement::at((x, y))
-        + Circle::new((0, 0), 3, ShapeStyle::from(&color).filled())
-        + Text::new(
-            String::from(label),
-            (5, 5),
-            ("sans-serif", FONT_SIZE).into_font(),
-        );
+    let event = Circle::new((x, y), 3, style);
     root.draw(&event)?;
     Ok(())
 }
@@ -84,6 +101,24 @@ fn draw_hline(
         + Text::new(
             String::from(label),
             (-20, 5),
+            ("sans-serif", FONT_SIZE).into_font(),
+        );
+    root.draw(&event)?;
+    Ok(())
+}
+
+fn draw_legend_element(
+    root: &DrawingArea<BitMapBackend, Cartesian2d<RangedCoordu32, RangedCoordu32>>,
+    label: &str,
+    x: u32,
+    y: u32,
+    style: ShapeStyle,
+) -> Result<(), Box<dyn Error>> {
+    let event = EmptyElement::at((x, y))
+        + Circle::new((0, 0), 3, style)
+        + Text::new(
+            String::from(label),
+            (15, -7),
             ("sans-serif", FONT_SIZE).into_font(),
         );
     root.draw(&event)?;
@@ -144,11 +179,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let host = event.host;
         let x = *event.clock.get(&host).unwrap() as u32 * EVENT_PAD_X + EVENT_PAD_X;
         let y = *host_ys.get(&host).unwrap();
-        match event.event_type {
-            EventType::Receive => draw_event(&root, "", x, y, RED)?,
-            EventType::Send => draw_event(&root, "", x, y, BLACK)?,
-            _ => draw_event(&root, "", x, y, BLACK)?,
-        }
+        draw_event(&root, x, y, event.event_type.style())?;
 
         if let EventType::Receive = event.event_type {
             let sender: Vec<String> = event
@@ -161,8 +192,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let send_clock = event.clock.get(&sender).unwrap();
             let send_x = *send_clock as u32 * EVENT_PAD_X + EVENT_PAD_X;
             let send_y = *host_ys.get(&sender).unwrap();
-            draw_conn(&mut chart, (send_x, send_y), (x, y), RED)?;
+            draw_conn(&mut chart, (send_x, send_y), (x, y), BLACK)?;
         }
+    }
+
+    let legend_y = h - 50;
+    let mut legend_x = 50;
+    for et in EventType::iter() {
+        let name = format!("{:?}", et);
+        draw_legend_element(&root, &name, legend_x, legend_y, et.style())?;
+        legend_x += 50 + 10 * name.len() as u32;
     }
 
     root.present()?;

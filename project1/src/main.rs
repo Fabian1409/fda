@@ -12,6 +12,10 @@ const HLINE_PAD_Y: u32 = 100;
 const EVENT_PAD_X: u32 = 50;
 const FONT_SIZE: f32 = 20.0;
 
+const SEND_EVENT: &str = "Send event";
+const RECV_EVENT: &str = "Receive event";
+const CHECKPOINT_EVENT: &str = "Checkpoint";
+
 #[derive(Debug, Clone)]
 struct Event {
     title: String,
@@ -138,9 +142,9 @@ fn visualize(events: &[Event], hosts: &BTreeMap<String, usize>) -> Result<(), Bo
         let host = event.host.clone();
         let x = event.clock as u32 * EVENT_PAD_X + EVENT_PAD_X;
         let y = *host_ys.get(&host).unwrap();
-        let label = if event.title.eq("Receive event")
-            | event.title.eq("Send event")
-            | event.title.eq("Checkpoint")
+        let label = if event.title.eq(RECV_EVENT)
+            | event.title.eq(SEND_EVENT)
+            | event.title.eq(CHECKPOINT_EVENT)
         {
             String::from(event.title.chars().next().unwrap())
         } else {
@@ -148,7 +152,7 @@ fn visualize(events: &[Event], hosts: &BTreeMap<String, usize>) -> Result<(), Bo
         };
         draw_event(&root, label, x, y, ShapeStyle::from(&BLACK).filled())?;
 
-        if event.title.eq("Receive event") {
+        if event.title.eq(RECV_EVENT) {
             let sender_clock = event.sender_clock.as_ref().unwrap();
             let send_x = sender_clock.1 as u32 * EVENT_PAD_X + EVENT_PAD_X;
             let send_y = *host_ys.get(&sender_clock.0).unwrap();
@@ -183,7 +187,7 @@ fn assign_vector_clocks(events: &mut Vec<Event>, hosts: &[String]) {
         // own vclock += 1
         vclocks.get_mut(&host).unwrap()[*host_idxs.get(&host).unwrap()] += 1;
 
-        if event.title.eq("Receive event") {
+        if event.title.eq(RECV_EVENT) {
             // get sender and sender_clock from recv event
             let sender_clock = event.sender_clock.as_ref().unwrap();
 
@@ -197,7 +201,7 @@ fn assign_vector_clocks(events: &mut Vec<Event>, hosts: &[String]) {
                     vclocks.get_mut(&host).unwrap()[j] = vclocks.get(&host).unwrap()[j].max(vec[j]);
                 }
             });
-        } else if event.title.eq("Send event") {
+        } else if event.title.eq(SEND_EVENT) {
             // store sender vclock in messages
             messages.insert(
                 (host.clone(), event.clock),
@@ -223,9 +227,8 @@ fn are_concurrent(e1: &Event, e2: &Event) -> bool {
 fn count_concurrent_events(events: &[Event]) -> usize {
     let mut count = 0;
     for (i, e1) in events.iter().enumerate() {
-        for e2 in events.iter().skip(i) {
+        for e2 in events.iter().skip(i + 1) {
             if are_concurrent(e1, e2) {
-                assert_ne!(e1.host, e2.host);
                 count += 1;
                 // println!("{e1:?} ||| {e2:?}");
             }
@@ -237,7 +240,7 @@ fn count_concurrent_events(events: &[Event]) -> usize {
 fn is_consistent_cut(cut: &[Event], host_events: &HashMap<String, Vec<Event>>) -> bool {
     for (host, events) in host_events {
         for event in events {
-            if event.title.eq("Receive event") {
+            if event.title.eq(RECV_EVENT) {
                 let sender_clock = event.sender_clock.as_ref().unwrap();
                 let send_event = host_events
                     .get(&sender_clock.0)
@@ -284,11 +287,16 @@ fn find_recovery_line(events: &[Event], hosts: &[String], fail: &[String]) -> Ve
     let recovery_lines: Vec<Vec<Event>> = consistent_cuts
         .into_iter()
         .filter(|cut| {
-            fail.iter().fold(true, |acc, f| {
-                acc & cut.iter().any(|e| e.title.eq("Checkpoint") & e.host.eq(f))
+            fail.iter().all(|f| {
+                cut.iter()
+                    .any(|e| e.title.eq(CHECKPOINT_EVENT) & e.host.eq(f))
+            }) & cut.iter().all(|e| {
+                e.title.eq(CHECKPOINT_EVENT) | e.clock.eq(&host_events.get(&e.host).unwrap().len())
             })
         })
         .collect();
+
+    println!("Number of recovery lines {}", recovery_lines.len());
 
     let recovery_lines_sorted: Vec<Vec<Event>> = recovery_lines
         .into_iter()
@@ -337,19 +345,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     assign_vector_clocks(&mut events, &hosts);
 
     let count = count_concurrent_events(&events);
-    println!("Number of concurrent event pairs: {count}");
+    println!("Number of concurrent event pairs {count}");
 
-    println!("Events with vector clocks:");
+    println!("Events with vector clocks");
     for (i, event) in events.iter().enumerate() {
         println!("{i}: {event:?}");
     }
 
     if let Some(fail) = matches.get_one::<String>("fail") {
         let fail: Vec<String> = fail.split(',').map(String::from).collect();
-        println!("Following hosts will fail: {fail:?}");
+        println!("Following hosts will fail {fail:?}");
 
         let recovery_line = find_recovery_line(&events, &hosts, &fail);
-        println!("Found recovery line: {recovery_line:?}");
+        println!("Found recovery line {recovery_line:?}");
     } else {
         println!("No host will fail, no recovery line created");
     }

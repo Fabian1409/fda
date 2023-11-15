@@ -222,8 +222,8 @@ fn are_concurrent(e1: &Event, e2: &Event) -> bool {
 
 fn count_concurrent_events(events: &[Event]) -> usize {
     let mut count = 0;
-    for e1 in events {
-        for e2 in events {
+    for (i, e1) in events.iter().enumerate() {
+        for e2 in events.iter().skip(i) {
             if are_concurrent(e1, e2) {
                 assert_ne!(e1.host, e2.host);
                 count += 1;

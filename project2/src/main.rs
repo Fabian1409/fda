@@ -1,5 +1,5 @@
 use clap::{arg, command};
-use rand::{seq::IteratorRandom, Rng};
+use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -9,11 +9,12 @@ use std::{
 };
 
 const T_GOSSIP: u64 = 2;
-const T_FAIL: u64 = 5;
-const T_CLEANUP: u64 = 10;
+const T_FAIL: u64 = 10;
+const T_CLEANUP: u64 = 20;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Message {
+    msg_id: usize,
     receiver_id: usize,
     heartbeats: HashMap<usize, u64>,
 }
@@ -22,12 +23,14 @@ struct Message {
 enum State {
     Running,
     Faulty,
+    Removed,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
     state: State,
     updated: Instant,
+    heartbeat: u64,
 }
 
 impl Default for Node {
@@ -35,6 +38,7 @@ impl Default for Node {
         Self {
             state: State::Running,
             updated: Instant::now(),
+            heartbeat: 0,
         }
     }
 }
@@ -67,19 +71,13 @@ fn main() -> Result<(), zmq::Error> {
         .bind(format!("tcp://*:{}", 5550 + id).as_str())
         .expect("failed binding publisher");
 
-    let mut heartbeats = HashMap::new();
     let mut nodes = HashMap::new();
     for i in 0..num {
-        heartbeats.insert(i, 0u64);
-        if i != id {
-            nodes.insert(i, Node::default());
-        }
+        nodes.insert(i, Node::default());
     }
-    let heartbeats = Arc::new(Mutex::new(heartbeats));
     let nodes = Arc::new(Mutex::new(nodes));
 
     // subscriber thread
-    let thread_heartbeats = Arc::clone(&heartbeats);
     let thread_nodes = Arc::clone(&nodes);
     thread::spawn(move || {
         let context = zmq::Context::new();
@@ -90,89 +88,97 @@ fn main() -> Result<(), zmq::Error> {
                 subscriber
                     .connect(format!("tcp://localhost:{}", 5550 + i).as_str())
                     .expect("failed connecting subscriber");
+                subscriber.set_rcvtimeo(100).unwrap();
                 subscriber.set_subscribe(b"").expect("failed subscribing");
                 subscribers.insert(i, subscriber);
             }
         }
         loop {
             for (i, subscriber) in subscribers.iter() {
-                let envelope = subscriber
-                    .recv_string(0)
-                    .expect("failed receiving envelope")
-                    .unwrap();
-                let message = subscriber
-                    .recv_string(0)
-                    .expect("failed receiving message")
-                    .unwrap();
-                let message: Message = serde_json::from_str(&message).unwrap();
+                if let Ok(Ok(envelope)) = subscriber.recv_string(0) {
+                    let message = subscriber.recv_string(0).unwrap().unwrap();
+                    let message: Message = serde_json::from_str(&message).unwrap();
 
-                if envelope.eq("GOSSIP") & (message.receiver_id == id) {
-                    log(
-                        id,
-                        format!(
-                            "Received heartbeats {:?} received from node {i}",
-                            message.heartbeats
-                        )
-                        .as_str(),
-                    );
+                    if envelope.eq("GOSSIP") & (message.receiver_id == id) {
+                        log(
+                            id,
+                            format!(
+                                "Recv msg_id {} heartbeats {:?} received from node {i}",
+                                message.msg_id, message.heartbeats
+                            )
+                            .as_str(),
+                        );
 
-                    // update timestamp
-                    thread_nodes.lock().unwrap().get_mut(i).unwrap().updated = Instant::now();
-                    thread_nodes.lock().unwrap().get_mut(i).unwrap().state = State::Running;
+                        // update timestamp and reset state
+                        thread_nodes.lock().unwrap().get_mut(i).unwrap().updated = Instant::now();
+                        thread_nodes.lock().unwrap().get_mut(i).unwrap().state = State::Running;
 
-                    // update heartbeats with received ones
-                    message.heartbeats.into_iter().for_each(|(node, received)| {
-                        match thread_heartbeats.lock().unwrap().get_mut(&node) {
-                            Some(heartbeat) => {
-                                *heartbeat = (*heartbeat).max(received);
-                            }
-                            None => {
-                                thread_nodes.lock().unwrap().insert(node, Node::default());
-                                thread_heartbeats.lock().unwrap().insert(node, received);
-                            }
-                        }
-                    });
+                        // update heartbeats with received ones
+                        let mut nodes = thread_nodes.lock().unwrap();
+                        message.heartbeats.into_iter().for_each(|(i, received)| {
+                            let node = nodes.get_mut(&i).unwrap();
+                            node.heartbeat = (node.heartbeat).max(received);
+                        });
+                    }
+                } else {
+                    continue;
                 }
             }
         }
     });
 
     // t_fail check thread
-    let thread_heartbeats = Arc::clone(&heartbeats);
     let thread_nodes = Arc::clone(&nodes);
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
-        for (i, node) in thread_nodes.lock().unwrap().iter_mut() {
+        for (i, node) in thread_nodes
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .filter(|(i, _)| !(*i).eq(&id))
+        {
             if matches!(node.state, State::Running)
                 & (node.updated.elapsed() > Duration::from_secs(T_FAIL))
             {
                 log(id, format!("Node {i} set to faulty").as_str());
                 node.state = State::Faulty;
                 node.updated = Instant::now();
-            } else if node.updated.elapsed() > Duration::from_secs(T_CLEANUP) {
+            } else if (matches!(node.state, State::Faulty))
+                & (node.updated.elapsed() > Duration::from_secs(T_CLEANUP))
+            {
                 log(id, format!("Node {i} removed from neighbor list").as_str());
-                thread_heartbeats.lock().unwrap().remove(i);
-                thread_nodes.lock().unwrap().remove(i);
+                node.state = State::Removed;
             }
         }
     });
 
     // publisher
     let mut rng = rand::thread_rng();
+    let mut msg_id = 0;
     loop {
-        if heartbeats.lock().unwrap().len() == 1 {
-            log(id, "No nodes in neighbor list");
-        } else {
-            let mut receiver_id = id;
-            while receiver_id == id {
-                receiver_id = *heartbeats.lock().unwrap().keys().choose(&mut rng).unwrap();
-            }
-            *heartbeats.lock().unwrap().get_mut(&id).unwrap() += 1;
+        let receiver_id = nodes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(i, node)| !(*i).eq(&id) & !matches!(node.state, State::Removed))
+            .map(|(i, _)| i)
+            .cloned()
+            .choose(&mut rng);
+
+        if let Some(receiver_id) = receiver_id {
+            nodes.lock().unwrap().get_mut(&id).unwrap().heartbeat += 1;
+            let heartbeats: HashMap<usize, u64> = nodes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, node)| !matches!(node.state, State::Removed))
+                .map(|(i, node)| (*i, node.heartbeat))
+                .collect();
             log(
                 id,
                 format!(
-                    "Sending heartbeats {:?} to node {receiver_id}",
-                    heartbeats.lock().unwrap()
+                    "Send msg_id {msg_id} heartbeats {:?} to node {receiver_id}",
+                    heartbeats
                 )
                 .as_str(),
             );
@@ -180,13 +186,18 @@ fn main() -> Result<(), zmq::Error> {
                 .send("GOSSIP", zmq::SNDMORE)
                 .expect("failed sending second envelope");
             let message = Message {
+                msg_id,
                 receiver_id,
-                heartbeats: heartbeats.lock().unwrap().clone(),
+                heartbeats,
             };
             publisher.send(serde_json::to_string(&message).unwrap().as_str(), 0)?;
+            msg_id += 1;
+            thread::sleep(Duration::from_secs(T_GOSSIP));
+        } else {
+            log(id, "No nodes in neighbor list");
+            thread::sleep(Duration::from_secs(T_GOSSIP));
+            continue;
         }
-
-        thread::sleep(Duration::from_secs(T_GOSSIP));
 
         // if rng.gen_range(0..30) < 1 {
         //     break;

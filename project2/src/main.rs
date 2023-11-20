@@ -2,7 +2,7 @@ use clap::{arg, command};
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -16,7 +16,7 @@ const T_CLEANUP: u64 = 20;
 struct Message {
     msg_id: usize,
     receiver_id: usize,
-    heartbeats: HashMap<usize, u64>,
+    heartbeats: BTreeMap<usize, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ fn main() -> Result<(), zmq::Error> {
         .bind(format!("tcp://*:{}", 5550 + id).as_str())
         .expect("failed binding publisher");
 
-    let mut nodes = HashMap::new();
+    let mut nodes = BTreeMap::new();
     for i in 0..num {
         nodes.insert(i, Node::default());
     }
@@ -167,7 +167,7 @@ fn main() -> Result<(), zmq::Error> {
 
         if let Some(receiver_id) = receiver_id {
             nodes.lock().unwrap().get_mut(&id).unwrap().heartbeat += 1;
-            let heartbeats: HashMap<usize, u64> = nodes
+            let heartbeats: BTreeMap<usize, u64> = nodes
                 .lock()
                 .unwrap()
                 .iter()

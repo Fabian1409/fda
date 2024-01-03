@@ -8,7 +8,5 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 crossterm = "0.27.0"
-enum-iterator = "1.4.1"
 rand = "0.8.5"
-ratatui = "0.25.0"
 strum = { version = "0.25.0", features = ["derive"] }

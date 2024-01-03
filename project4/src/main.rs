@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    cursor::{self},
+    cursor,
     event::{self, Event, KeyCode},
     style::{self, Stylize},
     terminal::{
@@ -83,9 +83,9 @@ impl QLearn {
 
     fn learn(&mut self, state1: State, action1: Action, reward: f32, state2: State) {
         let mut max_q = f32::MIN;
-        for q in (0..7).filter_map(|action| self.q.get(&(state1.clone(), action))) {
-            if *q > max_q {
-                max_q = *q;
+        for q in (0..7).map(|action| self.get_q(state2.clone(), action)) {
+            if q > max_q {
+                max_q = q;
             }
         }
         self.learn_q(state1, action1, reward, reward + self.gamma * max_q);
@@ -98,11 +98,9 @@ impl QLearn {
         } else {
             let mut max_q = f32::MIN;
             let mut action = 0;
-            for (a, q) in (0..7)
-                .filter_map(|action| self.q.get(&(state.clone(), action)).map(|q| (action, q)))
-            {
-                if *q > max_q {
-                    max_q = *q;
+            for (a, q) in (0..7).map(|action| (action, self.get_q(state.clone(), action))) {
+                if q > max_q {
+                    max_q = q;
                     action = a;
                 }
             }
@@ -224,10 +222,22 @@ struct World {
     fed: usize,
     last_state: Option<State>,
     last_action: Option<Action>,
+    tick_rate: Duration,
+    display_after: usize,
+    cat_enabled: bool,
+    look_dist: usize,
 }
 
 impl World {
-    fn new(world_file: String, cheese: Cheese, cat: Cat, mouse: Mouse) -> World {
+    fn new(
+        world_file: String,
+        cheese: Cheese,
+        cat: Cat,
+        mouse: Mouse,
+        display_after: usize,
+        tick_rate: Duration,
+        cat_enabled: bool,
+    ) -> World {
         let mut grid: Vec<Vec<Cell>> = read_to_string(world_file)
             .expect("failed to open")
             .lines()
@@ -241,8 +251,10 @@ impl World {
             })
             .collect();
         grid[cheese.pos.1][cheese.pos.0] = Cell::Cheese;
-        grid[cat.pos.1][cat.pos.0] = Cell::Cat;
         grid[mouse.pos.1][mouse.pos.0] = Cell::Mouse;
+        if cat_enabled {
+            grid[cat.pos.1][cat.pos.0] = Cell::Cat;
+        }
         World {
             grid,
             cheese,
@@ -253,6 +265,10 @@ impl World {
             eaten: 0,
             last_state: None,
             last_action: None,
+            tick_rate,
+            display_after,
+            cat_enabled,
+            look_dist: 5,
         }
     }
 
@@ -280,12 +296,26 @@ impl World {
         }
     }
 
-    fn calc_state(&self, pos: (usize, usize), d: i32) -> State {
+    fn calc_state(&self, pos: (usize, usize)) -> State {
         let mut state = Vec::new();
+        let d = self.look_dist as i32;
         for i in -d..d + 1 {
             for j in -d..d + 1 {
-                let x = (pos.0 as i32).saturating_add(i) as usize % self.grid[0].len();
-                let y = (pos.1 as i32).saturating_add(j) as usize % self.grid.len();
+                if i.abs() + j.abs() > d || (i == 0 && j == 0) {
+                    continue;
+                }
+                let x = pos.0 as i32 - i;
+                let y = pos.1 as i32 - j;
+                let x = if x.is_negative() {
+                    (x + self.grid[0].len() as i32) as usize
+                } else {
+                    x as usize % self.grid[0].len()
+                };
+                let y = if y.is_negative() {
+                    (y + self.grid.len() as i32) as usize
+                } else {
+                    y as usize % self.grid.len()
+                };
 
                 let v = match self.grid[y][x] {
                     Cell::Wall => 1,
@@ -301,11 +331,11 @@ impl World {
     }
 
     fn update_mouse(&mut self) {
-        let state = self.calc_state(self.mouse.pos, 2);
+        let state = self.calc_state(self.mouse.pos);
 
         let mut reward: f32 = -1.0;
 
-        if self.mouse.pos == self.cat.pos {
+        if self.mouse.pos == self.cat.pos && self.cat_enabled {
             self.eaten += 1;
             reward = -100.0;
             if let (Some(last_state), Some(last_action)) =
@@ -329,7 +359,7 @@ impl World {
             self.mouse.ai.learn(last_state, last_action, reward, state);
         }
 
-        let state = self.calc_state(self.mouse.pos, 2);
+        let state = self.calc_state(self.mouse.pos);
         let action = self.mouse.ai.choose_action(state.clone());
 
         self.last_state = Some(state);
@@ -361,55 +391,60 @@ impl World {
     fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
         let mut last_tick = Instant::now();
-        let tick_rate = Duration::from_millis(1000);
         loop {
-            stdout.execute(terminal::Clear(terminal::ClearType::All))?;
-            for (y, row) in self.grid.iter().enumerate() {
-                for (x, c) in row.iter().enumerate() {
-                    stdout.queue(cursor::MoveTo(x as u16, y as u16))?;
-                    match c {
-                        Cell::Wall => write!(stdout, "X")?,
-                        Cell::Cheese => {
-                            stdout.queue(style::PrintStyledContent('#'.yellow()))?;
+            if self.age > self.display_after {
+                stdout.execute(terminal::Clear(terminal::ClearType::All))?;
+                for (y, row) in self.grid.iter().enumerate() {
+                    for (x, c) in row.iter().enumerate() {
+                        stdout.queue(cursor::MoveTo(x as u16, y as u16))?;
+                        match c {
+                            Cell::Wall => write!(stdout, "X")?,
+                            Cell::Cheese => {
+                                stdout.queue(style::PrintStyledContent('#'.yellow()))?;
+                            }
+                            Cell::Cat => {
+                                stdout.queue(style::PrintStyledContent('C'.red()))?;
+                            }
+                            Cell::Mouse => {
+                                stdout.queue(style::PrintStyledContent('M'.grey()))?;
+                            }
+                            _ => {}
                         }
-                        Cell::Cat => {
-                            stdout.queue(style::PrintStyledContent('C'.red()))?;
+                    }
+                }
+                stdout.queue(cursor::MoveToNextLine(1))?;
+                stdout.write_fmt(format_args!("age = {}", self.age))?;
+                stdout.queue(cursor::MoveToNextLine(1))?;
+                stdout.write_fmt(format_args!("fed = {}", self.fed))?;
+                stdout.queue(cursor::MoveToNextLine(1))?;
+                stdout.write_fmt(format_args!("eaten = {}", self.eaten))?;
+
+                stdout.flush()?;
+
+                let timeout = self.tick_rate.saturating_sub(last_tick.elapsed());
+                if event::poll(timeout)? {
+                    if let Event::Key(key) = event::read()? {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            _ => {}
                         }
-                        Cell::Mouse => {
-                            stdout.queue(style::PrintStyledContent('M'.grey()))?;
-                        }
-                        _ => {}
                     }
                 }
             }
-            stdout.queue(cursor::MoveToNextLine(1))?;
-            stdout.write_fmt(format_args!("age = {}", self.age))?;
-            stdout.queue(cursor::MoveToNextLine(1))?;
-            stdout.write_fmt(format_args!("fed = {}", self.fed))?;
-            stdout.queue(cursor::MoveToNextLine(1))?;
-            stdout.write_fmt(format_args!("eaten = {}", self.eaten))?;
 
-            stdout.flush()?;
-
-            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-            if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        _ => {}
-                    }
-                }
-            }
-
-            if last_tick.elapsed() >= tick_rate {
+            if last_tick.elapsed() >= self.tick_rate || self.age < self.display_after {
                 self.grid[self.cheese.pos.1][self.cheese.pos.0] = Cell::Empty;
                 self.grid[self.mouse.pos.1][self.mouse.pos.0] = Cell::Empty;
-                self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Empty;
-                self.update_cat();
+                if self.cat_enabled {
+                    self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Empty;
+                    self.update_cat();
+                }
                 self.update_mouse();
                 self.grid[self.cheese.pos.1][self.cheese.pos.0] = Cell::Cheese;
                 self.grid[self.mouse.pos.1][self.mouse.pos.0] = Cell::Mouse;
-                self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Cat;
+                if self.cat_enabled {
+                    self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Cat;
+                }
                 self.age += 1;
                 last_tick = Instant::now();
             }
@@ -419,11 +454,15 @@ impl World {
 }
 
 fn main() -> Result<()> {
-    let world_file = env::args().nth(1).expect("filename required");
-    let cheese = Cheese::new(1, 1);
-    let cat = Cat::new(7, 6, Direction::Right);
-    let mouse = Mouse::new(1, 2, Direction::Right);
-    let mut world = World::new(world_file, cheese, cat, mouse);
+    let mut world = World::new(
+        env::args().nth(1).expect("filename required"),
+        Cheese::new(1, 1),
+        Cat::new(7, 6, Direction::Right),
+        Mouse::new(1, 2, Direction::Right),
+        10_000,
+        Duration::from_millis(1000),
+        true,
+    );
 
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;

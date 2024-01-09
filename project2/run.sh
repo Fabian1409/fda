@@ -6,7 +6,6 @@ cargo build --release
 # spawn $1 nodes
 for (( i = 0; i < $1; i++ ))
 do
-  echo $i
   ./target/release/project2 $1 $i &
   pids[${i}]=$!
 done

@@ -1,12 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    f32::consts::PI,
-};
-
 use num_bigint::BigUint;
 use plotters::{
-    coord::types::{RangedCoordf32, RangedCoordu32},
+    coord::types::RangedCoordf32,
     prelude::{
         BitMapBackend, Cartesian2d, ChartBuilder, Circle, DrawingArea, EmptyElement,
         IntoDrawingArea, IntoSegmentedCoord, Text,
@@ -14,22 +8,33 @@ use plotters::{
     series::Histogram,
     style::{Color, IntoFont, ShapeStyle, BLACK, RED, WHITE},
 };
-use rand::Rng;
 use sha2::{Digest, Sha256, Sha384, Sha512};
+use std::{
+    collections::HashMap,
+    error::Error,
+    f32::consts::PI,
+    fmt::{self, Debug},
+};
 
-const M: usize = 25;
+const M: u64 = 32;
 
-#[derive(Debug, Clone)]
-struct StorageNode {
+#[derive(Clone, PartialEq, Eq)]
+struct Node {
     name: String,
     host: String,
     hash: u64,
 }
 
-impl StorageNode {
+impl Node {
     fn new(name: String, host: String) -> Self {
         let hash = hash_sha256(&host);
         Self { name, host, hash }
+    }
+}
+
+impl Debug for Node {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Node {{name: {}, hash: {}}}", self.name, self.hash)
     }
 }
 
@@ -47,56 +52,118 @@ impl File {
 }
 
 fn hash_sha256(input: &str) -> u64 {
-    let hash = Sha256::digest(input);
-    let int = BigUint::from_bytes_le(&hash);
+    let hash = Sha256::digest(input.as_bytes());
+    let int = BigUint::from_bytes_be(&hash);
     (int % M).try_into().unwrap()
 }
 
 fn hash_sha384(input: &str) -> u64 {
-    let hash = Sha384::digest(input);
-    let int = BigUint::from_bytes_le(&hash);
+    let hash = Sha384::digest(input.as_bytes());
+    let int = BigUint::from_bytes_be(&hash);
     (int % M).try_into().unwrap()
 }
 
 fn hash_sha512(input: &str) -> u64 {
-    let hash = Sha512::digest(input);
-    let int = BigUint::from_bytes_le(&hash);
+    let hash = Sha512::digest(input.as_bytes());
+    let int = BigUint::from_bytes_be(&hash);
     (int % M).try_into().unwrap()
 }
 
-fn compute_finger_tables(nodes: &[StorageNode]) -> HashMap<String, Vec<StorageNode>> {
+fn compute_finger_tables(nodes: &[Node]) -> HashMap<String, Vec<Node>> {
     let mut finger_tables = HashMap::new();
-    for (i, node) in nodes.iter().enumerate() {
-        let finger_table: Vec<_> = nodes.iter().cycle().skip(i + 1).take(5).cloned().collect();
+    for node in nodes {
+        let mut finger_table = Vec::new();
+        let hashes: Vec<u64> = (0..5).map(|i| (node.hash + 2u64.pow(i)) % M).collect();
+        for hash in hashes {
+            let n = nodes
+                .iter()
+                .find(|n| n.hash >= hash)
+                .unwrap_or(nodes.first().unwrap())
+                .clone();
+            finger_table.push(n);
+        }
+
         finger_tables.insert(node.name.clone(), finger_table);
     }
     finger_tables
 }
 
+fn successor(finger_table: &[Node], key: u64) -> &Node {
+    let mut tmp = finger_table.to_vec();
+    let mut min = u64::MAX;
+    let mut successor = finger_table.first().unwrap();
+    for (i, node) in finger_table.iter().enumerate() {
+        if node.hash < key {
+            tmp[i].hash += M;
+        }
+
+        let d = tmp[i].hash - key;
+
+        if d < min {
+            min = d;
+            successor = node;
+        }
+    }
+    successor
+}
+
+fn predecessor(finger_table: &[Node], key: u64) -> &Node {
+    let mut min = u64::MAX;
+    let mut predecessor = finger_table.first().unwrap();
+    for node in finger_table {
+        let mut tmp_key = key;
+        if key < node.hash {
+            tmp_key += M;
+        }
+
+        let d = tmp_key - node.hash;
+
+        if d < min && d != 0 {
+            min = d;
+            predecessor = node;
+        }
+    }
+    predecessor
+}
+
 fn route_to_key(
-    finger_tables: &HashMap<String, Vec<StorageNode>>,
+    finger_tables: &HashMap<String, Vec<Node>>,
     init_node: &str,
     key: u64,
-) -> Vec<String> {
-    let mut route = vec![init_node.to_string()];
+) -> Vec<Node> {
     let mut table = finger_tables.get(init_node).unwrap();
-    loop {
-        if let Some(i) = table.iter().rposition(|n| n.hash <= key) {
-            let node = table.get(i).unwrap();
-            for t in table.iter() {
-                if t.hash >= key {
-                    println!("pushed {}", t.name);
-                    route.push(t.name.clone());
-                    return route;
-                }
-            }
-            println!("pushed {}", node.name);
-            route.push(node.name.clone());
-            table = finger_tables.get(&node.name).unwrap();
-        } else {
-            route.push(table.first().unwrap().name.clone());
-            table = finger_tables.get(&table.first().unwrap().name).unwrap();
+    let mut node = table.first().unwrap();
+    for ftab in finger_tables.values() {
+        if let Some(n) = ftab.iter().find(|n| n.name == init_node) {
+            node = n;
+            break;
         }
+    }
+
+    let mut route = vec![node.clone()];
+
+    loop {
+        let successor = successor(table, key);
+        let first = table.first().unwrap();
+        let mut tmp_key = key;
+        let mut tmp_succ_hash = successor.hash;
+
+        if key < node.hash {
+            tmp_key += M;
+        }
+
+        if successor.hash < node.hash {
+            tmp_succ_hash += M;
+        }
+
+        if *successor == *first && node.hash < tmp_key && tmp_succ_hash >= tmp_key {
+            route.push(successor.clone());
+            return route;
+        }
+
+        node = predecessor(table, key);
+        route.push(node.clone());
+        table = finger_tables.get(&route.last().unwrap().name).unwrap();
     }
 }
 
@@ -131,7 +198,7 @@ fn draw_event(
     Ok(())
 }
 
-fn plot_loads(node_files: HashMap<usize, usize>, n: usize) -> Result<(), Box<dyn Error>> {
+fn plot_loads(node_files: HashMap<u64, usize>, n: usize) -> Result<(), Box<dyn Error>> {
     let name = format!("loads_{n}.png");
     let root = BitMapBackend::new(&name, (800, 600)).into_drawing_area();
 
@@ -170,14 +237,18 @@ fn plot_loads(node_files: HashMap<usize, usize>, n: usize) -> Result<(), Box<dyn
 fn main() -> Result<(), Box<dyn Error>> {
     // -------------------- 1 --------------------
     let mut nodes = [
-        StorageNode::new("A".to_string(), "239.67.52.72".to_string()),
-        StorageNode::new("B".to_string(), "137.70.131.229".to_string()),
-        StorageNode::new("C".to_string(), "98.5.87.182".to_string()),
-        StorageNode::new("D".to_string(), "11.225.158.95".to_string()),
-        StorageNode::new("E".to_string(), "203.187.116.210".to_string()),
-        StorageNode::new("F".to_string(), "107.117.238.203".to_string()),
-        StorageNode::new("G".to_string(), "27.161.219.131".to_string()),
+        Node::new("A".to_string(), "239.67.52.72".to_string()),
+        Node::new("B".to_string(), "137.70.131.229".to_string()),
+        Node::new("C".to_string(), "98.5.87.182".to_string()),
+        Node::new("D".to_string(), "11.225.158.95".to_string()),
+        Node::new("E".to_string(), "203.187.116.210".to_string()),
+        Node::new("F".to_string(), "107.117.238.203".to_string()),
+        Node::new("G".to_string(), "27.161.219.131".to_string()),
     ];
+
+    let orig_nodes = nodes.clone();
+
+    println!("zero hash = {}", hash_sha256(""));
 
     nodes.iter().for_each(|node| {
         println!("node {} has hash {}", node.name, node.hash);
@@ -194,7 +265,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("file {} has hash {}", file.name, file.hash);
     });
 
-    let root = BitMapBackend::new("out.png", (1000, 1000)).into_drawing_area();
+    let root = BitMapBackend::new("ring.png", (1000, 1000)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let root = root.apply_coord_spec(Cartesian2d::<RangedCoordf32, RangedCoordf32>::new(
@@ -203,8 +274,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         (0..1000, 0..1000),
     ));
 
-    root.draw(&Circle::new((0f32, 0f32), 300, ShapeStyle::from(BLACK)))?;
-    let points = map_points_on_circle(M, 300f32);
+    root.draw(&Circle::new((0f32, 0f32), 250, ShapeStyle::from(BLACK)))?;
+    let points = map_points_on_circle(M as usize, 250f32);
 
     let mut node_files = HashMap::new();
     for file in files.iter() {
@@ -238,6 +309,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     root.present()?;
 
     // -------------------- 2 --------------------
+    println!("-------------------------------------------------------");
 
     let finger_tables = compute_finger_tables(&nodes);
     println!("finger tables:");
@@ -246,32 +318,51 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // -------------------- 3 --------------------
+    println!("-------------------------------------------------------");
 
-    println!("route to key = {:?}", route_to_key(&finger_tables, "A", 22));
+    for f in files {
+        println!(
+            "file = {} key = {} route = {:?}",
+            f.name,
+            f.hash,
+            route_to_key(&finger_tables, "A", f.hash)
+        );
+    }
 
     // -------------------- 4 --------------------
+    println!("-------------------------------------------------------");
     let mut nodes = nodes.to_vec();
     println!("node hashes for 1 hash:");
 
     for node in nodes.iter() {
         println!("node {} hash {}", node.name, node.hash);
     }
-    let mut rng = rand::thread_rng();
-    let mut node_files: HashMap<usize, usize> = HashMap::new();
-    for key in (0..1000).map(|_| rng.gen_range(0..M)) {
+    let mut node_files: HashMap<u64, usize> = HashMap::new();
+    for key in (0..1000).map(|i| hash_sha256(&format!("f{i}.mov"))) {
         let node_id = nodes
             .iter()
-            .find(|n| n.hash >= key as u64)
+            .find(|n| n.hash >= key)
             .unwrap_or(nodes.first().unwrap())
             .hash;
-        *node_files.entry(node_id as usize).or_default() += 1;
+        *node_files.entry(node_id).or_default() += 1;
     }
+    println!("files per node = {node_files:?}");
     plot_loads(node_files, 1)?;
 
+    // -------------------- 2 hashes --------------------
     println!("node hashes for 2 hash:");
-    for i in 0..7 {
-        let mut new_hashed = nodes[i].clone();
+    for node in orig_nodes.iter() {
+        let mut new_hashed = node.clone();
         new_hashed.hash = hash_sha384(&new_hashed.host);
+        // hash already used, fined next free hash
+        if nodes.iter().any(|n| n.hash == new_hashed.hash) {
+            for j in 0..M {
+                if !nodes.iter().any(|n| n.hash == (new_hashed.hash + j) % M) {
+                    new_hashed.hash = (new_hashed.hash + j) % M;
+                    break;
+                }
+            }
+        }
         nodes.push(new_hashed);
     }
 
@@ -281,21 +372,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("node {} hash {}", node.name, node.hash);
     }
 
-    let mut node_files: HashMap<usize, usize> = HashMap::new();
-    for key in (0..1000).map(|_| rng.gen_range(0..M)) {
+    let mut node_files: HashMap<u64, usize> = HashMap::new();
+    for key in (0..1000).map(|i| hash_sha256(&format!("f{i}.mov"))) {
         let node_id = nodes
             .iter()
-            .find(|n| n.hash >= key as u64)
+            .find(|n| n.hash >= key)
             .unwrap_or(nodes.first().unwrap())
             .hash;
-        *node_files.entry(node_id as usize).or_default() += 1;
+        *node_files.entry(node_id).or_default() += 1;
     }
+    println!("files per node = {node_files:?}");
     plot_loads(node_files, 2)?;
 
+    // -------------------- 3 hashes --------------------
     println!("node hashes for 3 hash:");
-    for i in 0..7 {
-        let mut new_hashed = nodes[i].clone();
+    for node in orig_nodes.iter() {
+        let mut new_hashed = node.clone();
         new_hashed.hash = hash_sha512(&new_hashed.host);
+        // hash already used, fined next free hash
+        if nodes.iter().any(|n| n.hash == new_hashed.hash) {
+            for j in 0..M {
+                if !nodes.iter().any(|n| n.hash == (new_hashed.hash + j) % M) {
+                    new_hashed.hash = (new_hashed.hash + j) % M;
+                    break;
+                }
+            }
+        }
         nodes.push(new_hashed);
     }
 
@@ -305,15 +407,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("node {} hash {}", node.name, node.hash);
     }
 
-    let mut node_files: HashMap<usize, usize> = HashMap::new();
-    for key in (0..1000).map(|_| rng.gen_range(0..M)) {
+    let mut node_files: HashMap<u64, usize> = HashMap::new();
+    for key in (0..1000).map(|i| hash_sha256(&format!("f{i}.mov"))) {
         let node_id = nodes
             .iter()
-            .find(|n| n.hash >= key as u64)
+            .find(|n| n.hash >= key)
             .unwrap_or(nodes.first().unwrap())
             .hash;
-        *node_files.entry(node_id as usize).or_default() += 1;
+        *node_files.entry(node_id).or_default() += 1;
     }
+    println!("files per node = {node_files:?}");
     plot_loads(node_files, 3)?;
 
     Ok(())

@@ -179,7 +179,7 @@ fn assign_vector_clocks(events: &mut Vec<Event>, hosts: &[String]) {
         vclocks.insert(h, vec![0usize; hosts.len()]);
     });
 
-    // TODO fails if log is not in cronological order
+    // fails if log is not in cronological order
     let mut messages = HashMap::<(String, usize), Vec<usize>>::new();
 
     for event in events {

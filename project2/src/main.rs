@@ -1,5 +1,5 @@
 use clap::{arg, command};
-use rand::seq::IteratorRandom;
+use rand::{seq::IteratorRandom, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -115,9 +115,12 @@ fn main() -> Result<(), zmq::Error> {
 
                         // update heartbeats with received ones
                         let mut nodes = thread_nodes.lock().unwrap();
-                        message.heartbeats.into_iter().for_each(|(i, received)| {
-                            let node = nodes.get_mut(&i).unwrap();
-                            node.heartbeat = (node.heartbeat).max(received);
+                        message.heartbeats.into_iter().for_each(|(j, received)| {
+                            let node = nodes.get_mut(&j).unwrap();
+                            // skip nodes which are faulty or removed
+                            if matches!(node.state, State::Running) {
+                                node.heartbeat = (node.heartbeat).max(received);
+                            }
                         });
                     }
                 } else {
@@ -196,13 +199,12 @@ fn main() -> Result<(), zmq::Error> {
         } else {
             log(id, "No nodes in neighbor list");
             thread::sleep(Duration::from_secs(T_GOSSIP));
-            continue;
         }
 
-        // if rng.gen_range(0..30) < 1 {
-        //     break;
-        // }
+        if rng.gen_range(0..10) < 1 {
+            break;
+        }
     }
-    // log(id, "Terminating ...");
-    // Ok(())
+    log(id, "Terminating ...");
+    Ok(())
 }

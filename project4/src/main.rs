@@ -1,4 +1,5 @@
 use anyhow::Result;
+use average::Variance;
 use clap::{arg, command, value_parser};
 use crossterm::{
     cursor,
@@ -208,7 +209,6 @@ struct Mouse {
     last_state: Option<State>,
     last_action: Option<Action>,
     last_cells: VecDeque<Position>,
-    last_cheese_dist: usize,
     fed_stats: Vec<usize>,
     time_to_cheese_stats: Vec<usize>,
 }
@@ -224,7 +224,6 @@ impl Mouse {
             last_state: None,
             last_action: None,
             last_cells: VecDeque::new(),
-            last_cheese_dist: usize::MAX,
             fed_stats: Vec::new(),
             time_to_cheese_stats: vec![0],
         }
@@ -249,7 +248,8 @@ struct World {
     grid: Vec<Vec<Cell>>,
     neighbors: HashMap<Position, Vec<Position>>,
     dijkstra: Dijkstra,
-    epochs: usize,
+    train_epochs: usize,
+    stats_epochs: usize,
     cheese: Cheese,
     cat: Cat,
     mouse: Mouse,
@@ -259,18 +259,20 @@ struct World {
     cat_enabled: bool,
     look_dist: usize,
     display: bool,
+    plot_stats: bool,
 }
 
 impl World {
     #[allow(clippy::too_many_arguments)]
     fn new(
         world_file: &str,
-        epochs: usize,
+        train_epochs: usize,
         dumb_mouse: bool,
         skip: usize,
         tick_rate: Duration,
         cat_enabled: bool,
         display: bool,
+        plot_stats: bool,
     ) -> World {
         let mut grid: Vec<Vec<Cell>> = read_to_string(world_file)
             .expect("failed to open")
@@ -307,6 +309,12 @@ impl World {
             }
         }
 
+        let stats_epochs = if plot_stats {
+            train_epochs + 1_000_000
+        } else {
+            train_epochs
+        };
+
         let cheese = Cheese::new(rand_pos(&grid));
         let cat = Cat::new(rand_pos(&grid));
         let mouse = Mouse::new(rand_pos(&grid), dumb_mouse);
@@ -320,7 +328,8 @@ impl World {
             grid,
             neighbors,
             dijkstra: Dijkstra::new(),
-            epochs,
+            train_epochs,
+            stats_epochs,
             cheese,
             cat,
             mouse,
@@ -330,6 +339,7 @@ impl World {
             cat_enabled,
             look_dist: 2,
             display,
+            plot_stats,
         }
     }
 
@@ -414,8 +424,10 @@ impl World {
             self.mouse.fed += 1;
             reward = 50.0;
             self.cheese.pos = rand_pos(&self.grid);
-            self.mouse.time_to_cheese_stats.push(0);
-        } else {
+            if self.age > self.train_epochs {
+                self.mouse.time_to_cheese_stats.push(0);
+            }
+        } else if self.age > self.train_epochs {
             *self.mouse.time_to_cheese_stats.last_mut().unwrap() += 1;
         }
 
@@ -465,8 +477,10 @@ impl World {
             self.mouse.fed += 1;
             reward = 50.0;
             self.cheese.pos = rand_pos(&self.grid);
-            self.mouse.time_to_cheese_stats.push(0);
-        } else {
+            if self.age > self.train_epochs {
+                self.mouse.time_to_cheese_stats.push(0);
+            }
+        } else if self.age > self.train_epochs {
             *self.mouse.time_to_cheese_stats.last_mut().unwrap() += 1;
         }
 
@@ -480,12 +494,7 @@ impl World {
         let cheese_dist =
             self.dijkstra
                 .shortest_path(&self.neighbors, self.mouse.pos, self.cheese.pos);
-        if cheese_dist < self.mouse.last_cheese_dist {
-            reward += 25.0;
-        } else {
-            reward -= 25.0;
-        }
-        // reward -= 2.0 * cheese_dist as f64;
+        reward -= 2.0 * cheese_dist as f64;
 
         let mut cells = HashMap::new();
         for c in self.mouse.last_cells.iter() {
@@ -510,7 +519,6 @@ impl World {
 
         self.mouse.last_state = Some(state);
         self.mouse.last_action = Some(action);
-        self.mouse.last_cheese_dist = cheese_dist;
         self.mouse.last_cells.push_front(self.mouse.pos);
         if self.mouse.last_cells.len() == 10 {
             self.mouse.last_cells.pop_back();
@@ -578,7 +586,9 @@ impl World {
                     self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Empty;
                     self.update_cat();
                 }
-                self.mouse.fed_stats.push(self.mouse.fed);
+                if self.age > self.train_epochs {
+                    self.mouse.fed_stats.push(self.mouse.fed);
+                }
                 if self.mouse.dumb {
                     self.update_mouse_old()
                 } else {
@@ -593,7 +603,7 @@ impl World {
                 last_tick = Instant::now();
             }
 
-            if self.age == self.epochs {
+            if self.age == self.stats_epochs {
                 break;
             }
         }
@@ -601,19 +611,67 @@ impl World {
     }
 }
 
-fn plot(name: &str, data: Vec<usize>) -> Result<()> {
-    let root = BitMapBackend::new(name, (640, 480)).into_drawing_area();
+fn max_count(data: &[usize]) -> usize {
+    let mut counts = HashMap::new();
+    for x in data {
+        *counts.entry(x).or_insert(1) += 1;
+    }
+    *counts.values().max().unwrap()
+}
+
+fn plot_ttc(data: Vec<usize>) -> Result<()> {
+    let root = BitMapBackend::new("time_to_cheese.png", (640, 480)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
-        // .caption(name, ("sans-serif", 50).into_font())
         .margin(50)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d(0usize..data.len(), 0usize..*data.iter().max().unwrap())?;
+        .build_cartesian_2d(
+            (0usize..*data.iter().max().unwrap()).into_segmented(),
+            0usize..max_count(&data) * 2,
+        )?;
 
-    chart.configure_mesh().draw()?;
+    chart
+        .configure_mesh()
+        .y_desc("count")
+        .x_desc("time to cheese")
+        .draw()?;
 
-    chart.draw_series(LineSeries::new(data.into_iter().enumerate(), &RED))?;
+    chart.draw_series(
+        Histogram::vertical(&chart)
+            .style(RED.filled())
+            .data(data.into_iter().map(|x| (x, 1))),
+    )?;
+
+    root.present()?;
+
+    Ok(())
+}
+
+fn plot_fed(data: Vec<usize>) -> Result<()> {
+    let root = BitMapBackend::new("fed.png", (640, 480)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .margin(50)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(
+            (0usize..*data.iter().max().unwrap()).into_segmented(),
+            0usize..max_count(&data) * 2,
+        )?;
+
+    chart
+        .configure_mesh()
+        .y_desc("count")
+        .x_desc("fed")
+        .draw()?;
+
+    chart.draw_series(
+        Histogram::vertical(&chart)
+            .style(RED.filled())
+            .data(data.into_iter().map(|x| (x, 1))),
+    )?;
 
     root.present()?;
 
@@ -623,7 +681,7 @@ fn plot(name: &str, data: Vec<usize>) -> Result<()> {
 fn main() -> Result<()> {
     let matches = command!()
         .arg(arg!(<world> "Path to world file"))
-        .arg(arg!(-e --epochs <epochs> "Number of epochs").value_parser(value_parser!(usize)))
+        .arg(arg!(-e --epochs <epochs> "Number of train epochs").value_parser(value_parser!(usize)))
         .arg(arg!(-c --cat "Cat enabled"))
         .arg(arg!(-d --dumb "Dumb mouse enabled"))
         .arg(arg!(-v --visualize "Visualize game output"))
@@ -634,7 +692,7 @@ fn main() -> Result<()> {
         .arg(arg!(-p --plot "Plot stats"))
         .get_matches();
     let world_file = matches.get_one::<String>("world").unwrap();
-    let epochs = *matches.get_one::<usize>("epochs").unwrap_or(&100_000);
+    let train_epochs = *matches.get_one::<usize>("epochs").unwrap_or(&1_000_000);
     let cat = *matches.get_one::<bool>("cat").unwrap_or(&false);
     let dumb_mouse = *matches.get_one::<bool>("dumb").unwrap_or(&false);
     let visualize = *matches.get_one::<bool>("visualize").unwrap_or(&false);
@@ -643,12 +701,13 @@ fn main() -> Result<()> {
 
     let mut world = World::new(
         world_file,
-        epochs,
+        train_epochs,
         dumb_mouse,
         skip,
         Duration::from_millis(500),
         cat,
         visualize,
+        plot_stats,
     );
 
     if world.display {
@@ -669,9 +728,31 @@ fn main() -> Result<()> {
     println!("fed = {}", world.mouse.fed);
     println!("eaten = {}", world.mouse.eaten);
 
-    if plot_stats {
-        plot("fed.png", world.mouse.fed_stats)?;
-        plot("time_to_cheese.png", world.mouse.time_to_cheese_stats)?;
+    if world.plot_stats {
+        let ttc: Variance = world
+            .mouse
+            .time_to_cheese_stats
+            .iter()
+            .map(|x| *x as f64)
+            .collect();
+
+        let bin_size = 1_000;
+        let fed_hist: Vec<usize> = (0..1_000_000 - bin_size)
+            .step_by(bin_size)
+            .map(|i| world.mouse.fed_stats[i + bin_size] - world.mouse.fed_stats[i])
+            .collect();
+
+        let fed: Variance = fed_hist.iter().map(|x| *x as f64).collect();
+
+        println!("time_to_cheese mean = {} +/- {}", ttc.mean(), ttc.error());
+        println!(
+            "fed per {} epochs mean = {} +/- {}",
+            bin_size,
+            fed.mean(),
+            fed.error()
+        );
+        plot_ttc(world.mouse.time_to_cheese_stats)?;
+        plot_fed(fed_hist)?;
     }
 
     Ok(())

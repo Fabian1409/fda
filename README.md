@@ -1,5 +1,8 @@
-name = Fabian Gruber
-matriculation number = 11908627
+# Name
+Fabian Gruber
+
+# Matriculation number
+11908627
 
 # Setup
 all projects are implemented using Rust.
@@ -60,4 +63,36 @@ the command below will spawn a cat and plot the stats.
 ```
 cargo run --release world_setup/world_empty.txt -cp
 ```
+
+empty, without cat, dumb mouse: 
+fed = 470
+eaten = 0
+time_to_cheese mean = 3648.6350364963487 +/- 587.0459812126829
+fed per 1000 epochs mean = 0.2712712712712714 +/- 0.021327192106714587
+
+empty, without cat, smart mouse:
+fed = 2926
+eaten = 0
+time_to_cheese mean = 697.8120195667369 +/- 37.965461217926226
+fed per 1000 epochs mean = 1.431431431431431 +/- 0.06033212800931284
+
+empty, with cat, dumb mouse:
+fed = 8548
+eaten = 359070
+time_to_cheese mean = 194.539580352885 +/- 3.7532429465524393
+fed per 1000 epochs mean = 4.191191191191186 +/- 0.07778574578919932
+
+empty, with cat, smart mouse:
+fed = 9373
+eaten = 370558
+time_to_cheese mean = 176.9838322045006 +/- 3.235991809341996
+fed per 1000 epochs mean = 4.571571571571566 +/- 0.0789005454369692
+
+walls, without cat, dumb mouse: 
+
+walls, without cat, smart mouse:
+
+walls, with cat, dumb mouse:
+
+walls, with cat, smart mouse:
 

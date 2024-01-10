@@ -49,12 +49,14 @@ cargo run --release
 
 # Project 4
 this program takes 1 required argument for the world_file and has a couple of options
--e, --epochs <epochs>  Number of epochs
+```
+-e, --epochs <epochs>  Number of train epochs
 -c, --cat              Cat enabled
 -d, --dumb             Dumb mouse enabled
 -v, --visualize        Visualize game output
 -s, --skip <skip>      Skip showing number of epochs
 -p, --plot             Plot stats
+```
 
 by default it will run for 100_000 epochs, not spawn a cat, use the improved mouse, not visualize, not skip showing epochs and not plot stats.
 to show the game pass -v, to spawn a cat use -c, ... see above.
@@ -64,35 +66,53 @@ the command below will spawn a cat and plot the stats.
 cargo run --release world_setup/world_empty.txt -cp
 ```
 
+the following stats correspond to the provided images and were taken after 1_000_000 epochs of traning
+
 empty, without cat, dumb mouse: 
-fed = 470
-eaten = 0
-time_to_cheese mean = 3648.6350364963487 +/- 587.0459812126829
-fed per 1000 epochs mean = 0.2712712712712714 +/- 0.021327192106714587
+- fed = 2452
+- eaten = 0
+- time_to_cheese mean = 928.3680297397779 +/- 148.70132644710114
+- fed per 1000 epochs mean = 1.0730730730730713 +/- 0.06536416865798593
 
 empty, without cat, smart mouse:
-fed = 2926
-eaten = 0
-time_to_cheese mean = 697.8120195667369 +/- 37.965461217926226
-fed per 1000 epochs mean = 1.431431431431431 +/- 0.06033212800931284
+- fed = 58384
+- eaten = 0
+- time_to_cheese mean = 32.5795836131633 +/- 0.38870378239188386
+- fed per 1000 epochs mean = 29.80280280280282 +/- 0.3749073720988146
 
 empty, with cat, dumb mouse:
-fed = 8548
-eaten = 359070
-time_to_cheese mean = 194.539580352885 +/- 3.7532429465524393
-fed per 1000 epochs mean = 4.191191191191186 +/- 0.07778574578919932
+- fed = 27792
+- eaten = 330637
+- time_to_cheese mean = 51.167811212386226 +/- 0.4540805009029415
+- fed per 1000 epochs mean = 16.02402402402402 +/- 0.13616537507572618
 
 empty, with cat, smart mouse:
-fed = 9373
-eaten = 370558
-time_to_cheese mean = 176.9838322045006 +/- 3.235991809341996
-fed per 1000 epochs mean = 4.571571571571566 +/- 0.0789005454369692
+- fed = 40825
+- eaten = 376225
+- time_to_cheese mean = 35.55483987207794 +/- 0.24897337033042036
+- fed per 1000 epochs mean = 22.2022022022022 +/- 0.15792379507362544
 
 walls, without cat, dumb mouse: 
+- fed = 1858
+- eaten = 0
+- time_to_cheese mean = 1714.2658662092633 +/- 130.36352283883036
+- fed per 1000 epochs mean = 0.581581581581582 +/- 0.035677966690775005
 
 walls, without cat, smart mouse:
+- fed = 8837
+- eaten = 0
+- time_to_cheese mean = 179.34265103697084 +/- 11.378767640834004
+- fed per 1000 epochs mean = 5.54954954954955 +/- 0.22706357652630343
 
 walls, with cat, dumb mouse:
+- fed = 585
+- eaten = 9729
+- time_to_cheese mean = 3363.8783783783765 +/- 515.2091427156209
+- fed per 1000 epochs mean = 0.2952952952952958 +/- 0.028851054976219943
 
 walls, with cat, smart mouse:
+- fed = 19368
+- eaten = 163671
+- time_to_cheese mean = 89.63880390802369 +/- 1.646801640971177
+- fed per 1000 epochs mean = 10.126126126126128 +/- 0.16208290523952368
 

@@ -12,7 +12,7 @@ use dijkstra::Dijkstra;
 use plotters::prelude::*;
 use rand::{seq::IteratorRandom, Rng};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet},
     env,
     fs::read_to_string,
     io::{self, Write},
@@ -208,7 +208,8 @@ struct Mouse {
     fed: usize,
     last_state: Option<State>,
     last_action: Option<Action>,
-    last_cells: VecDeque<Position>,
+    last_cells: Vec<Position>,
+    next_best_pos: Option<Position>,
     fed_stats: Vec<usize>,
     time_to_cheese_stats: Vec<usize>,
 }
@@ -223,7 +224,8 @@ impl Mouse {
             fed: 0,
             last_state: None,
             last_action: None,
-            last_cells: VecDeque::new(),
+            last_cells: Vec::new(),
+            next_best_pos: None,
             fed_stats: Vec::new(),
             time_to_cheese_stats: vec![0],
         }
@@ -457,7 +459,7 @@ impl World {
     fn update_mouse(&mut self) {
         let state = self.calc_state(self.mouse.pos);
 
-        let mut reward: f64 = 0.0;
+        let mut reward: f64 = -1.0;
 
         if self.mouse.pos == self.cat.pos && self.cat_enabled {
             self.mouse.eaten += 1;
@@ -485,28 +487,47 @@ impl World {
         }
 
         if self.cat_enabled {
-            let cat_dist =
-                self.dijkstra
-                    .shortest_path(&self.neighbors, self.mouse.pos, self.cat.pos);
-            reward += 5.0 * cat_dist as f64;
-        }
-
-        let cheese_dist =
-            self.dijkstra
-                .shortest_path(&self.neighbors, self.mouse.pos, self.cheese.pos);
-        reward -= 2.0 * cheese_dist as f64;
-
-        let mut cells = HashMap::new();
-        for c in self.mouse.last_cells.iter() {
-            if let Some(n) = cells.get_mut(c) {
-                *n += 10;
-            } else {
-                cells.insert(c, 0);
+            // punish/reward if moved towards/away cat
+            if state.contains(&3) {
+                if let Some(last_pos) = self.mouse.last_cells.last() {
+                    let cat_path =
+                        self.dijkstra
+                            .shortest_path(&self.neighbors, self.mouse.pos, self.cat.pos);
+                    if last_pos == cat_path.first().unwrap() {
+                        reward -= 50.0;
+                    } else {
+                        reward += 50.0;
+                    }
+                }
             }
         }
 
-        let backtrack_penalty = *cells.values().max().unwrap_or(&0) as f64;
-        reward -= backtrack_penalty;
+        if state.contains(&2) {
+            // reward mouse if moved towards cheese
+            if let (Some(last_pos), Some(best_pos)) =
+                (self.mouse.last_cells.last(), self.mouse.next_best_pos)
+            {
+                if *last_pos == best_pos {
+                    reward += 25.0;
+                } else {
+                    reward -= 25.0;
+                }
+            }
+        }
+
+        let mut repeated_move = false;
+        let mut cells = HashSet::new();
+        for c in self.mouse.last_cells.iter() {
+            if !cells.insert(c) {
+                repeated_move = true;
+            }
+        }
+
+        // punish if a repeating move were made
+        if repeated_move {
+            reward -= 50.0;
+            self.mouse.last_cells.clear();
+        }
 
         if let (Some(last_state), Some(last_action)) =
             (self.mouse.last_state.clone(), self.mouse.last_action)
@@ -519,10 +540,10 @@ impl World {
 
         self.mouse.last_state = Some(state);
         self.mouse.last_action = Some(action);
-        self.mouse.last_cells.push_front(self.mouse.pos);
-        if self.mouse.last_cells.len() == 10 {
-            self.mouse.last_cells.pop_back();
-        }
+        let cheese_path =
+            self.dijkstra
+                .shortest_path(&self.neighbors, self.mouse.pos, self.cheese.pos);
+        self.mouse.next_best_pos = cheese_path.first().cloned();
 
         let new_pos = self
             .mouse
@@ -533,6 +554,7 @@ impl World {
             )
             .unwrap_or(self.mouse.pos);
         self.mouse.pos = new_pos;
+        self.mouse.last_cells.push(self.mouse.pos);
     }
 
     fn run(&mut self) -> Result<()> {
@@ -580,24 +602,29 @@ impl World {
             }
 
             if last_tick.elapsed() >= self.tick_rate || self.age <= self.skip || !self.display {
-                self.grid[self.cheese.pos.1][self.cheese.pos.0] = Cell::Empty;
-                self.grid[self.mouse.pos.1][self.mouse.pos.0] = Cell::Empty;
+                let mouse_pos_old = self.mouse.pos;
+                let cheese_pos_old = self.cheese.pos;
+                let cat_pos_old = self.cat.pos;
                 if self.cat_enabled {
-                    self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Empty;
                     self.update_cat();
-                }
-                if self.age > self.train_epochs {
-                    self.mouse.fed_stats.push(self.mouse.fed);
                 }
                 if self.mouse.dumb {
                     self.update_mouse_old()
                 } else {
                     self.update_mouse();
                 }
+                self.grid[cheese_pos_old.1][cheese_pos_old.0] = Cell::Empty;
+                self.grid[mouse_pos_old.1][mouse_pos_old.0] = Cell::Empty;
+                if self.cat_enabled {
+                    self.grid[cat_pos_old.1][cat_pos_old.0] = Cell::Empty;
+                }
                 self.grid[self.cheese.pos.1][self.cheese.pos.0] = Cell::Cheese;
                 self.grid[self.mouse.pos.1][self.mouse.pos.0] = Cell::Mouse;
                 if self.cat_enabled {
                     self.grid[self.cat.pos.1][self.cat.pos.0] = Cell::Cat;
+                }
+                if self.age > self.train_epochs {
+                    self.mouse.fed_stats.push(self.mouse.fed);
                 }
                 self.age += 1;
                 last_tick = Instant::now();

@@ -5,17 +5,18 @@ use std::{
 
 use crate::Position;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 struct State {
-    cost: usize,
+    path: Vec<Position>,
     position: Position,
 }
 
 impl Ord for State {
     fn cmp(&self, other: &Self) -> Ordering {
         other
-            .cost
-            .cmp(&self.cost)
+            .path
+            .len()
+            .cmp(&self.path.len())
             .then_with(|| self.position.cmp(&other.position))
     }
 }
@@ -27,7 +28,7 @@ impl PartialOrd for State {
 }
 
 pub struct Dijkstra {
-    cache: HashMap<(Position, Position), usize>,
+    cache: HashMap<(Position, Position), Vec<Position>>,
 }
 
 impl Dijkstra {
@@ -42,9 +43,9 @@ impl Dijkstra {
         neighbors: &HashMap<Position, Vec<Position>>,
         start: Position,
         target: Position,
-    ) -> usize {
-        if let Some(dist) = self.cache.get(&(start, target)) {
-            return *dist;
+    ) -> Vec<Position> {
+        if let Some(path) = self.cache.get(&(start, target)) {
+            return path.clone();
         }
 
         let mut dist: HashMap<Position, usize> =
@@ -53,33 +54,38 @@ impl Dijkstra {
         let mut heap = BinaryHeap::new();
 
         *dist.get_mut(&start).unwrap() = 0;
-        heap.push(State {
-            cost: 0,
-            position: start,
-        });
+        heap.push(
+            State {
+                path: vec![],
+                position: start,
+            }
+            .clone(),
+        );
 
-        while let Some(State { cost, position }) = heap.pop() {
+        while let Some(State { path, position }) = heap.pop() {
             if position == target {
-                self.cache.insert((start, target), cost);
-                return cost;
+                self.cache.insert((start, target), path.clone());
+                return path;
             }
 
-            if cost > *dist.get(&position).unwrap() {
+            if path.len() > *dist.get(&position).unwrap() {
                 continue;
             }
 
             for n_pos in neighbors.get(&position).unwrap() {
+                let mut path = path.clone();
+                path.push(*n_pos);
                 let next = State {
-                    cost: cost + 1,
+                    path,
                     position: *n_pos,
                 };
 
-                if next.cost < *dist.get(n_pos).unwrap() {
+                if next.path.len() < *dist.get(n_pos).unwrap() {
+                    *dist.get_mut(n_pos).unwrap() = next.path.len();
                     heap.push(next);
-                    *dist.get_mut(n_pos).unwrap() = next.cost;
                 }
             }
         }
-        usize::MAX
+        vec![]
     }
 }

@@ -58,7 +58,7 @@ this program takes 1 required argument for the world_file and has a couple of op
 -p, --plot             Plot stats
 ```
 
-by default it will run for 100_000 epochs, not spawn a cat, use the improved mouse, not visualize, not skip showing epochs and not plot stats.
+by default it will run for 1_000_000 epochs, not spawn a cat, use the improved mouse, not visualize, not skip showing epochs and not plot stats.
 to show the game pass -v, to spawn a cat use -c, ... see above.
 the command below will spawn a cat and plot the stats.
 
@@ -115,4 +115,13 @@ walls, with cat, smart mouse:
 - eaten = 163671
 - time_to_cheese mean = 89.63880390802369 +/- 1.646801640971177
 - fed per 1000 epochs mean = 10.126126126126128 +/- 0.16208290523952368
+
+## Mouse Improvements
+to improve the mouse agent, i added rewards if the mouse moves towards the cheese if it is contained in the current state.
+if it moved away from the cheese, it is punished (negative reward).
+i used dijkstra's algorithm to find what the best move would have been and in the next epoch i check if the mouse took that move or not.
+the same is applied for the cat, but instead the mouse is punished if it moved towards it and rewarded if not.
+
+to stop the mouse from getting stuck in a repeating pattern, i punish the mouse if it reached a cell again.
+this is can lead to false punishments if going back was a good move, but thius should not be to relevant.
 
